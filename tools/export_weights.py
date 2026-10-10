@@ -185,6 +185,9 @@ def run_golden(ref_dir, net, args):
                                                                         entry["flow_absmean"]))
     with open(os.path.join(args.golden, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
+    with open(os.path.join(args.golden, "manifest.txt"), "w") as f:
+        for e in manifest:
+            f.write("%s %.6f\n" % (e["name"], e["t"]))
 
 
 def dump_intermediates(net, model, x, ts, outdir, entry):

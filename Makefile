@@ -40,6 +40,25 @@ $(B)/liblfhvx_skel.so: $(B)/lfhvx_skel.o
 $(B)/lfhvx_bench: apps/lfhvx_bench.c inc/lfhvx_proto.h | $(B)
 	$(ANDROID_CC) -O2 -Wall -Wextra -o $@ $< -ldl
 
+# ---- plain-C reference (host x86 and arm64) -----------------------------------
+HOST_CC ?= cc
+PYTHON  ?= $(HOME)/.cache/claude-tmp/rife-npu/.venv/bin/python
+GOLDEN_PAIRS := pair000_320x192 pair002_320x192 pair003_320x192 pair011_320x192
+
+$(B)/weights/rife46_f32.bin $(B)/weights/rife46_hvx.bin tests/golden/manifest.txt: tools/export_weights.py
+	$(PYTHON) tools/export_weights.py
+
+weights: $(B)/weights/rife46_f32.bin
+
+$(B)/test_ref: ref/test_ref.c ref/lfrife_ref.c ref/lfrife_ref.h tests/golden_util.h inc/lfrife_weights.h | $(B)
+	$(HOST_CC) -O3 -std=c11 -Wall -Wextra -o $@ ref/test_ref.c ref/lfrife_ref.c -lm
+
+$(B)/test_ref_arm64: ref/test_ref.c ref/lfrife_ref.c ref/lfrife_ref.h tests/golden_util.h inc/lfrife_weights.h | $(B)
+	$(ANDROID_CC) -O3 -std=c11 -Wall -Wextra -o $@ ref/test_ref.c ref/lfrife_ref.c -lm
+
+test-host: $(B)/test_ref $(B)/weights/rife46_f32.bin
+	$(B)/test_ref $(B)/weights/rife46_f32.bin tests/golden $(GOLDEN_PAIRS) --max-err 2e-3
+
 push: all
 	$(ADB) shell mkdir -p $(DEVDIR)
 	$(ADB) push $(B)/liblfhvx_skel.so $(B)/lfhvx_bench $(DEVDIR)/
@@ -54,4 +73,4 @@ clean-device:
 clean:
 	rm -rf $(B)
 
-.PHONY: all push run clean clean-device
+.PHONY: weights test-host all push run clean clean-device

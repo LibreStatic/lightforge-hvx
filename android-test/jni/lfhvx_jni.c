@@ -260,7 +260,7 @@ static void bench_mt(uint64_t h, void *src, uint32_t size) {
         }
         if (nt == 1) base_cycles = best_ticks;
         double bytes = (double)size * reps;
-        out("MAC MT threads=%u: %s, hvx_units=%d, %u reps wall-on-DSP %.3f ms, %.2f GB/s, "
+        out("MAC MT threads=%u: %s, hvx_units=0x%x, %u reps wall-on-DSP %.3f ms, %.2f GB/s, "
             "speedup x%.2f",
             nt, ok ? "OK" : "WRONG", units, reps, best_ticks / 19200.0,
             best_ticks ? bytes / (best_ticks / 19.2e6) / 1e9 : 0,
@@ -268,24 +268,47 @@ static void bench_mt(uint64_t h, void *src, uint32_t size) {
     }
 }
 
-static void vtcm_probe(uint64_t h) {
+static int vtcm_probe(uint64_t h, const uint8_t *src, uint32_t len) {
     lfhvx_vtcm_info vi;
     memset(&vi, 0, sizeof(vi));
-    remote_arg pra[1];
-    pra[0].buf.pv = &vi;
-    pra[0].buf.nLen = sizeof(vi);
-    int rc = p_invoke(h, LF_SCALARS_MAKE(LFHVX_M_VTCM, 0, 1), pra);
-    out("VTCM probe rc=0x%x: syms compute_res_attr_init=%d acquire=%d HAP_request_VTCM=%d "
-        "qurt_hvx_get_units=%d",
-        rc, vi.has_attr_init, vi.has_acquire, vi.has_request_vtcm, vi.has_hvx_units);
-    out("VTCM probe: hvx_units=0x%x compute_res: init=%d set_vtcm=%d ctx=0x%x ptr=0x%x "
-        "size=%u, rw_ok=%d, release=%d; HAP_request_VTCM(%u)=0x%x",
-        vi.hvx_units, vi.attr_init_rc, vi.set_vtcm_rc, vi.ctx_id, vi.vtcm_ptr, vi.vtcm_size,
-        vi.vtcm_rw_ok, vi.release_rc, vi.req_size, vi.req_ptr);
-    out("VTCM probe: u8 sat-add 128 KiB in VTCM, 64 reps: %.2f B/cycle (DDR-backed same size %.2f "
-        "B/cycle)",
-        vi.vtcm_pcycles ? (double)vi.bench_bytes / vi.vtcm_pcycles : 0,
-        vi.ddr_pcycles ? (double)vi.bench_bytes / vi.ddr_pcycles : 0);
+    lfhvx_kernel_args args = {.len = len, .reps = 32};
+    remote_arg pra[3];
+    pra[0].buf.pv = &args;
+    pra[0].buf.nLen = sizeof(args);
+    pra[1].buf.pv = (void *)src;
+    pra[1].buf.nLen = len;
+    pra[2].buf.pv = &vi;
+    pra[2].buf.nLen = sizeof(vi);
+    int rc = p_invoke(h, LF_SCALARS_MAKE(LFHVX_M_VTCM, 2, 1), pra);
+    out("VTCM try %u KiB in + %u KiB out", len >> 10, len >> 10);
+    out("VTCM rc=0x%x syms: compute_res_attr_init=%d acquire=%d HAP_request_VTCM=%d "
+        "qurt_hvx_get_units=%d; hvx_units=0x%x (%d x 128B)",
+        rc, vi.has_attr_init, vi.has_acquire, vi.has_request_vtcm, vi.has_hvx_units, vi.hvx_units,
+        (vi.hvx_units >> 8) & 0xff);
+    out("VTCM query rc=%d total=%u; set_param rc=%d acquire ctx=0x%x ptr=0x%x size=%u "
+        "release=%d legacy_ptr=0x%x",
+        vi.query_rc, vi.vtcm_total, vi.set_vtcm_rc, vi.ctx_id, vi.vtcm_ptr, vi.vtcm_size,
+        vi.release_rc, vi.req_ptr);
+    if (!vi.bench_len) {
+        out("VTCM bench (%u KiB): not run, no VTCM granted", len >> 10);
+        return 0;
+    }
+    uint32_t ref_sum = 0;
+    for (uint32_t i = 0; i < len; i++) {
+        unsigned v = src[i] * 2u;
+        ref_sum += v > 255 ? 255 : v;
+    }
+    int64_t mac_ref = mac_reference((const int16_t *)src, len / 128);
+    double bytes = (double)vi.bench_len * vi.bench_reps;
+    out("VTCM u8 sat-add %u KiB VTCM->VTCM x%u: %.2f B/cycle, %.2f GB/s, %s", len >> 10,
+        vi.bench_reps, vi.u8add_pcycles ? bytes / vi.u8add_pcycles : 0,
+        vi.ticks_u8add ? bytes / (vi.ticks_u8add / 19.2e6) / 1e9 : 0,
+        vi.dst_sum == ref_sum ? "BIT-EXACT (sum)" : "WRONG");
+    out("VTCM i16 MAC %u KiB in VTCM x%u: %.2f B/cycle, %.2f GB/s, %s", len >> 10, vi.bench_reps,
+        vi.mac_pcycles ? bytes / vi.mac_pcycles : 0,
+        vi.ticks_mac ? bytes / (vi.ticks_mac / 19.2e6) / 1e9 : 0,
+        vi.mac_checksum == mac_ref ? "BIT-EXACT" : "WRONG");
+    return 1;
 }
 
 /* mode: 0 = skel from nativeLibraryDir, 1 = skel copied to filesDir,
@@ -443,8 +466,9 @@ static int run_all(const char *native_dir, const char *files_dir, int mode) {
     }
 
     if (getenv("LFHVX_NO_BONUS") == NULL) {
-        vtcm_probe(h);
         bench_mt(h, src, size);
+        for (uint32_t l = size; l >= (64u << 10); l >>= 2)
+            if (vtcm_probe(h, src, l)) break;
     }
 
     buf_free(src);

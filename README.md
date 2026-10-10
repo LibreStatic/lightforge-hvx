@@ -8,6 +8,11 @@ using only open-source tools.
 unsigned user PD on the cDSP. It is driven from an arm64 binary run from
 `adb shell`, its results are bit-exact, and it reports DSP cycle counts.
 
+**It also works from a normal installed app** (`untrusted_app`, targetSdk 36,
+not debuggable). The skel is shipped in the APK and loaded from
+`nativeLibraryDir`. In that app domain, the multithreaded HVX code (6 HVX
+contexts) and VTCM (8 MiB) also work. See "From an installed app" below.
+
 ## Clean-room rules followed
 
 - Not used: Hexagon SDK, QAIC, QNN, SNPE, or any Qualcomm-licensed header,
@@ -26,7 +31,16 @@ unsigned user PD on the cDSP. It is driven from an arm64 binary run from
   `inc/remote.h`, `inc/rpcmem.h`, `inc/HAP_debug.h`, `src/mod_table.c`.
 - Halide's MIT `src/runtime/qurt_hvx.cpp` and `mini_qurt.h` (commit `ee9f17a`)
   were used as a reference for the `qurt_hvx_lock(QURT_HVX_MODE_128B = 1)`
-  convention. Halide's committed prebuilt skel was not used. We only compared
+  convention, for the `qurt_thread_create/join` prototypes and the
+  `qurt_thread_attr_t` field layout, and (`mini_qurt_vtcm.h`) for
+  `HAP_request_VTCM/HAP_release_VTCM`.
+- llama.cpp's MIT `ggml/src/ggml-hexagon/htp/main.c` was read only for the
+  argument lists of the `HAP_compute_res_*` VTCM calls and for
+  `qurt_hvx_get_units() >> 8` (the count of 128-byte HVX units). Its SDK
+  headers were not used. The user-PD shell does not export the `HAP_compute_res_*`
+  names. It exports a `compute_resource_*` family, which we found by
+  probing candidate names as weak imports. The attribute object is passed as
+  an opaque, zeroed 256-byte blob. Halide's committed prebuilt skel was not used. We only compared
   its ELF program headers with ours while debugging the loader (see below).
 
 ## Device
@@ -44,9 +58,10 @@ listed from shell (SELinux `adsprpcd_file`), but `cdsprpcd` reads
 | Path | What |
 |---|---|
 | `inc/lfhvx_proto.h` | Hand-written wire protocol (scalars macros, method ids, arg structs). Replaces a QAIC IDL. |
-| `dsp/lfhvx_skel.c` | Hexagon skel: `lfhvx_skel_handle_invoke`, open/close, `add`, HVX/scalar u8 saturating add, HVX int16 `vdmpy` MAC, info. |
+| `dsp/lfhvx_skel.c` | Hexagon skel: `lfhvx_skel_handle_invoke`, open/close, `add`, HVX/scalar u8 saturating add, HVX int16 `vdmpy` MAC, info, multithreaded MAC (qurt threads), VTCM probe and bench. |
 | `apps/lfhvx_bench.c` | arm64 driver: unsigned-PD request, open, correctness checks, latency and throughput benchmarks. |
 | `Makefile` | Build, push, run. |
+| `android-test/` | Hand-built test APK (no Gradle): `AndroidManifest.xml`, `MainActivity.java`, `jni/lfhvx_jni.c` (JNI port of the bench plus DSP_INFO, multithread and VTCM probes), `build.sh`, `run.sh`. |
 
 ## Build and run
 
@@ -181,33 +196,127 @@ power/QoS state. Per-pixel work only pays off when it is batched, at roughly
    an unsigned PD anyway ("Unsigned:Y, Signed:N") because the caller has no
    signed-PD privilege.
 
-## Notes for an app (not tested here)
+## From an installed app (untrusted_app)
 
-- The manifest needs `<uses-native-library android:name="libcdsprpc.so" android:required="false"/>`
-  so that the app's linker namespace can `dlopen` the public vendor library.
-- The skel must be readable by the app process at a path in
-  `ADSP_LIBRARY_PATH`. The likely place is the app's `nativeLibraryDir` with
-  `android:extractNativeLibs="true"` (or `useLegacyPackaging`), so that the
-  `.so` exists as a real file. The skel is a Hexagon ELF, so packaging must be
-  checked: AGP may strip or refuse a non-ABI-matching `.so` under `lib/arm64-v8a`.
-  The alternative is shipping it as an asset and copying it to `filesDir`.
-- Set `ADSP_LIBRARY_PATH` in the process before libcdsprpc initializes.
-- The untrusted_app SELinux domain may differ from shell for the
-  `IDspService` HAL path. This is the main thing to verify next.
+```sh
+android-test/build.sh        # -> android-test/out/lfhvx-test.apk (aapt2, javac, d8, zipalign, apksigner)
+android-test/run.sh 0 1 2    # install (non-incremental), launch each mode, print logcat tag LFHVX
+adb -s 192.168.0.250:40989 uninstall com.librestatic.lfhvxtest
+```
+
+APK setup:
+
+- `<uses-native-library android:name="libcdsprpc.so" android:required="false"/>`.
+  nativeloader logs `uses_libraries=libcdsprpc.so`, and `dlopen("libcdsprpc.so")`
+  succeeds from the app's classloader namespace.
+- `android:extractNativeLibs="true"`. The Hexagon skel is packaged as
+  `lib/arm64-v8a/liblfhvx_skel.so` next to the arm64 `liblfhvx_jni.so`.
+  PackageManager extracts it to `nativeLibraryDir` without checking the
+  ELF machine type. A Gradle/AGP build was not tested, so whether AGP strips
+  or rejects a non-arm64 ELF there is still unchecked. The `filesDir` copy
+  (mode 1) is the fallback if it does.
+- The JNI code calls `setenv` on `DSP_LIBRARY_PATH` and `ADSP_LIBRARY_PATH`
+  (`<nativeLibraryDir>;/vendor/dsp/cdsp;...`) before the first `dlopen` of
+  libcdsprpc.
+- The activity runs everything on launch on a worker thread and prints to
+  logcat (`LFHVX`) and to a TextView.
+
+The process was verified as `u:r:untrusted_app:s0:c233,c258,c512,c768`. All three
+modes pass, with bit-exact results:
+
+| Mode | What | Result |
+|---|---|---|
+| 0 | skel loaded from `nativeLibraryDir`, `DSPRPC_CONTROL_UNSIGNED_MODULE` requested | PASS |
+| 1 | skel copied to `filesDir`, which is the path given to the loader | PASS |
+| 2 | `nativeLibraryDir`, no unsigned-module request | PASS (an unsigned PD is created anyway) |
+
+The transport goes through the HAL, not direct node access:
+
+- The app's own `open("/dev/fastrpc-cdsp")` fails with `EACCES` and logs
+  `avc: denied { open } ... untrusted_app ... vendor_qdsp_device`.
+- libcdsprpc then logs `no access to default device of domain 3, open thru HAL`,
+  and `DspClient: AIDL HAL found` /
+  `open_hal_session: opened device fd ... for domain 3`. The
+  `vendor.qti.hardware.dsp.IDspService` AIDL HAL hands the app a device fd, as
+  it does for `shell`.
+- No SELinux denial affects the libcdsprpc path. The only denials come from our
+  own direct-open probe, so an app should not probe the node itself.
+
+`remote_handle_control(DSPRPC_GET_DSP_INFO)` from the app returns
+`UNSIGNED_PD_SUPPORT=1`, `HVX_SUPPORT_128B=6`, `VTCM_PAGE=8 MiB`,
+`VTCM_COUNT=1`, `ARCH_VER=0x8381` and `HMX_SUPPORT_*=0`. `DOMAIN_SUPPORT` reads
+0, with a "non-domain usage" warning. That warning is harmless.
+
+App numbers (v73 skel, 1 MiB rpcmem buffers, 3 runs). They match the shell runs:
+
+| Measurement | Result |
+|---|---|
+| First `remote_handle64_open` | 49–227 ms (the first launch after install was the slowest) |
+| `add()` round trip | min 90–115 µs, p50 ≈ 396 µs, p99 1.3–3.6 ms |
+| u8 sat-add HVX, 32 reps | 6.6–7.3 B/cycle (8.3–9.1 GB/s) |
+| u8 sat-add scalar | 0.19 B/cycle (HVX is ~35× faster) |
+| int16 MAC HVX, 32 reps | 31–39 B/cycle (39–48 GB/s) |
+| DSP clock | 1248 MHz |
+
+### Multithreaded HVX (bonus)
+
+`LFHVX_M_MAC_MT` splits the 1 MiB int16 MAC over N `qurt_thread_create`
+threads. Each thread has a 16 KiB static stack, takes the caller's priority,
+and runs its own `qurt_hvx_lock(128B)`. `qurt_hvx_get_units()` returns `0x600`,
+that is 6 × 128-byte HVX contexts in the unsigned PD. The thread attribute
+with Halide's defaults is accepted as-is. All runs are bit-exact. The times
+below are DSP wall time from thread creation to join, for 32 reps:
+
+| Threads | DSP time | Throughput | Speedup |
+|---|---|---|---|
+| 1 | 0.84–0.88 ms | 38–40 GB/s | 1.00× |
+| 2 | 0.48 ms | 69 GB/s | 1.75–1.81× |
+| 3 | 0.31–0.35 ms | 97–107 GB/s | 2.47–2.80× |
+| 4 | 0.28–0.31 ms | 107–121 GB/s | 2.7–3.2× |
+
+### VTCM (bonus)
+
+- `HAP_compute_res_*` is not exported. The `compute_resource_*` family is
+  exported (`attr_init`, `acquire`, `query_VTCM`, ...). Legacy
+  `HAP_request_VTCM` resolves, but it is not used because the resource
+  manager path succeeds first.
+- `compute_resource_query_VTCM` reports 8 MiB in total. Asking for 2 MiB (as a
+  single page) returned a context, a VTCM pointer `0xfd800000` and a 4 MiB
+  grant (rounded up to a page), and `release` returned 0.
+- With src and dst both in VTCM (1 MiB each, 32 reps, single thread):
+  - u8 sat-add runs at **31.9 B/cycle (39.8 GB/s)**, against 6.6–7.3 B/cycle
+    from DDR/L2. That is about 4.5× faster. The output was checked by byte sum.
+  - int16 MAC runs at **63.2–63.6 B/cycle (79 GB/s)**, against 31–39. That
+    is about 1.8× faster, and bit-exact.
+- So VTCM fixes the L2 spill seen in the 1–4 MiB sweep. The remaining cost is
+  the copy from DDR into VTCM, which is not timed here. DMA or `l2fetch` is the
+  next thing to try for that.
+
+## Notes for Lightforge integration
+
+- Gradle: use `packaging.jniLibs.useLegacyPackaging = true` and put the skel
+  in `jniLibs/arm64-v8a/`. Check that AGP keeps it, because it has a Hexagon
+  ELF header. If AGP drops it, ship it as an asset and copy it to `filesDir`
+  (mode 1 shows that path works).
+- Do the `setenv` before anything in the process loads libcdsprpc. That
+  includes other libraries such as ONNX Runtime QNN EP.
+- Budget for the fixed RPC cost (p50 about 400 µs) and the first open (50–230 ms).
+  Batch work per call.
 
 ## Open questions
 
-- **App domain:** does `untrusted_app` get the HAL fallback and the unsigned
-  PD the way `shell` does? This is the most important follow-up.
+- **App domain:** answered, yes (see above). Remaining checks: other
+  Snapdragon phones and vendors, and AGP packaging of the skel.
 - **RPC latency:** the 395 µs p50 is suspiciously constant. Is it a CPU
   wake-up or DSP DCVS effect? PM QoS halves it half of the time. Things to
   try: `HAP_power_set` (DCVS v3 / apptype compute) declared ourselves,
   `remote_handle_control(DSPRPC_CONTROL_WAKELOCK)`, and dspqueue (the
   open-source `dspqueue` in quic/fastrpc) for lower-latency queued work.
-- **VTCM and `l2fetch`:** VTCM via `HAP_compute_res_*` (structs would need to
-  be re-derived from open sources) and `l2fetch` prefetch should lift the
-  DDR-bound 1–4 MiB cases. Multi-threading over the 4–6 HVX contexts is also
-  untested.
+- **VTCM and threads:** both answered for the unsigned PD (see above). The
+  `compute_resource_*` argument lists are inferred from the `HAP_` call sites
+  and are only proven for the acquire/pointer/release path used here. Still
+  open: DDR-to-VTCM DMA (or `l2fetch`), more than 4 threads, and whether HMX can
+  be reached from an unsigned PD (`HMX_SUPPORT_*` reads 0).
 - **libc in the shell:** what the user-PD shell actually exports (libc, `qurt_*`
   beyond the HVX calls, `HAP_perf_*`). Weak declarations let us probe at runtime.
 - **Code coverage:** whether code using libc++/C++ exceptions or TLS can be

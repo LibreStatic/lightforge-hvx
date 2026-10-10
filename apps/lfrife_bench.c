@@ -118,7 +118,76 @@ static void probe2(lfrife *h, uint32_t sz) {
            rc, o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], sz, o[8]);
 }
 
+static double now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+}
+static int cmp_d(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
+
+/* run <threads> <iters> <pair>... : accuracy vs golden + cold/warm timing + per-group breakdown */
+static int run_mode(const char *dir, int nthreads, int iters, int npairs, char **pairs) {
+    const int w = 320, h = 192;
+    char p[512];
+    snprintf(p, sizeof p, "%s/rife46_hvx.bin", dir);
+    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = nthreads, .qos = -1};
+    lfrife *r = NULL;
+    double t0 = now_ms();
+    int rc = lfrife_open(&cfg, &r);
+    printf("open+setup: %d (%s) %.0f ms raw 0x%x\n", rc, lfrife_strerror(rc), now_ms() - t0, r ? lfrife_last_rc(r) : 0);
+    if (rc) return 1;
+    lfrife_set_profiling(r, 1);
+    float *flow = malloc(sizeof(float) * 4 * w * h), *mask = malloc(sizeof(float) * w * h);
+    double *ts = malloc(sizeof(double) * (size_t)iters), *dsp = malloc(sizeof(double) * (size_t)iters);
+    double grp[16] = {0};
+    for (int k = 0; k < npairs; k++) {
+        char q[512];
+        size_t n;
+        snprintf(q, sizeof q, "%s/golden/%s_img0.rgba", dir, pairs[k]);
+        uint8_t *i0 = lf_read_file(q, &n);
+        snprintf(q, sizeof q, "%s/golden/%s_img1.rgba", dir, pairs[k]);
+        uint8_t *i1 = lf_read_file(q, &n);
+        snprintf(q, sizeof q, "%s/golden/%s_flow.f32", dir, pairs[k]);
+        float *gf = lf_read_file(q, &n);
+        snprintf(q, sizeof q, "%s/golden/%s_mask.f32", dir, pairs[k]);
+        float *gm = lf_read_file(q, &n);
+        snprintf(q, sizeof q, "%s/golden", dir);
+        float t = lf_pair_t(q, pairs[k]);
+        if (!i0 || !i1 || !gf || !gm) { printf("missing golden for %s\n", pairs[k]); return 1; }
+        for (int i = 0; i < iters; i++) {
+            double a = now_ms();
+            rc = lfrife_flow(r, i0, i1, w * 4, w, h, t, flow, mask);
+            ts[i] = now_ms() - a;
+            lfrife_stats st;
+            lfrife_get_stats(r, &st);
+            dsp[i] = st.total_ms;
+            if (i > 0) for (int g = 0; g < 16; g++) grp[g] += st.group_ms[g];
+            if (rc) { printf("lfrife_flow failed: %d (%s) raw 0x%x\n", rc, lfrife_strerror(rc), lfrife_last_rc(r)); return 1; }
+        }
+        lf_cmp c = lf_compare(flow, gf, mask, gm, w * h);
+        printf("%s t=%.3f: flow max %.3e mean %.3e frac>0.5px %.4f mask max %.3e mean %.3e\n", pairs[k], t, c.fmax,
+               c.fmean, c.fbad, c.mmax, c.mmean);
+        double cold = ts[0];
+        qsort(ts, (size_t)iters, sizeof(double), cmp_d);
+        qsort(dsp, (size_t)iters, sizeof(double), cmp_d);
+        printf("  cold %.1f ms; wall p50 %.1f p90 %.1f ms; dsp p50 %.1f p90 %.1f ms (%d iters, %d threads)\n", cold,
+               ts[iters / 2], ts[(iters * 9) / 10], dsp[iters / 2], dsp[(iters * 9) / 10], iters, nthreads);
+        free(i0); free(i1); free(gf); free(gm);
+    }
+    if (iters > 1) {
+        double den = (double)(iters - 1) * npairs;
+        printf("per-group mean ms (build X / conv0+1 / res / deconv+up) per block:\n");
+        for (int b = 0; b < 4; b++)
+            printf("  block%d: %.2f %.2f %.2f %.2f\n", b, grp[b * 4] / den, grp[b * 4 + 1] / den, grp[b * 4 + 2] / den,
+                   grp[b * 4 + 3] / den);
+    }
+    lfrife_close(r);
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "run") && argc > 4)
+        return run_mode("/data/local/tmp/lightforge-hvx", atoi(argv[2]), atoi(argv[3]), argc - 4, argv + 4);
     const char *dir = "/data/local/tmp/lightforge-hvx";
     const char *cmd = argc > 1 ? argv[1] : "probe";
     lfrife_config cfg = {.skel_dir = dir, .qos = -1};

@@ -1,4 +1,5 @@
 # lightforge-hvx: our own HVX code on the cDSP, open-source tooling only
+> The RIFE v4.6 flow network port (architecture, build/test commands, accuracy and timing tables) is documented in [docs/rife.md](docs/rife.md).
 
 Feasibility spike. The question was whether we can run our own Hexagon HVX code
 on the Qualcomm compute DSP (cDSP) of a retail, non-rooted phone, and time it,

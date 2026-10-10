@@ -203,8 +203,7 @@ lfnet *lfnet_create(const void *blob, size_t size, int W, int H, int nthreads) {
         k->s = (int)hd->block_scale[b];
         k->cin = (int)hd->block_cin[b];
         k->c = (int)hd->block_c[b];
-        k->hs = H / k->s;
-        k->ws = W / k->s;
+        { int sh = k->s == 8 ? 3 : k->s == 4 ? 2 : k->s == 2 ? 1 : 0; k->hs = H >> sh; k->ws = W >> sh; }
         const int hs = k->hs, ws = k->ws, c = k->c;
         if (!tens_alloc(n, &k->X, hs, ws, (k->cin + 1) & ~1)) goto fail;
         if (!tens_alloc(n, &k->A0, hs / 2, ws / 2, pad64(c / 2))) goto fail;
@@ -374,7 +373,9 @@ static void run_conv(lfnet *n, lfpool *p, int tid, const cjob *j) {
         uint32_t i = lfpool_next(p);
         if (i >= items) break;
         /* ob-major so that threads working at the same time share weights */
-        conv_row(j, (int)(i % (uint32_t)rows), (int)(i / (uint32_t)rows));
+        int ob = 0;
+        while (i >= (uint32_t)rows) { i -= (uint32_t)rows; ob++; __asm__ volatile("" : "+r"(i)); }
+        conv_row(j, (int)i, ob);
     }
 }
 

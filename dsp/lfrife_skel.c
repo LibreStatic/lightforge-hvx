@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * RIFE v4.6 flow network on the Hexagon cDSP (HVX). Freestanding, built with
  * upstream clang + ld.lld only. Protocol: inc/lfrife_proto.h.

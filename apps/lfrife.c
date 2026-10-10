@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * arm64 Android side of lfrife: FastRPC glue to the RIFE DSP skel.
  * libcdsprpc.so is loaded with dlopen; its symbols and structs are declared here

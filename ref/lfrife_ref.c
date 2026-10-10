@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause */
+/* SPDX-License-Identifier: MIT */
 #include "lfrife_ref.h"
 
 #include <math.h>

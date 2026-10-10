@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: MIT
  * HVX 128B intrinsics from LLVM's own headers (Apache-2.0 with LLVM exception);
  * on the host (LF_HOST) a small emulation is used instead. */
 #ifndef LF_HVX_H

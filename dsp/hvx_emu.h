@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Host (x86) emulation of the handful of HVX intrinsics used by dsp/lfrife_net.c,
  * so the network logic and tensor layouts can be tested against the golden

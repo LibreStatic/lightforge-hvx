@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: BSD-3-Clause
+# SPDX-License-Identifier: MIT
 #
 # Hand-built APK (no Gradle): aapt2 + javac + d8 + zipalign + apksigner.
 # Output: android-test/out/lfhvx-test.apk

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: BSD-3-Clause
+# SPDX-License-Identifier: MIT
 #
 # Open-source-only build: upstream clang/lld for the Hexagon skel,
 # Android NDK clang for the arm64 driver. No Hexagon SDK.
@@ -10,7 +10,7 @@ HEX_CC     ?= clang
 HEX_LD     ?= ld.lld
 ANDROID_CC ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(API)-clang
 
-ADB        ?= adb -s 192.168.0.250:40989
+ADB        ?= adb
 DEVDIR     ?= /data/local/tmp/lightforge-hvx
 
 B := build

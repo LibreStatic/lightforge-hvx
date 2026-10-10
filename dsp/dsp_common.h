@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Shared freestanding definitions for the Hexagon skels: DSP-side remote_arg,
  * QuRT/HAP symbols (declared by us, resolved by the user-PD loader), timers.

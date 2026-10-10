@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * On-disk weight blob format for the RIFE v4.6 IFNet port (written by
  * tools/export_weights.py, read by the host/arm64 reference, the apps-side

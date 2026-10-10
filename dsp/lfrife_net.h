@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: MIT
  * RIFE v4.6 IFNet flow network, HVX implementation (also builds on the host with LF_HOST). */
 #ifndef LFRIFE_NET_H
 #define LFRIFE_NET_H

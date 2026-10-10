@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Wire protocol between the arm64 side and the RIFE DSP skel (liblfrife_skel.so).
  * Same FastRPC conventions as inc/lfhvx_proto.h.

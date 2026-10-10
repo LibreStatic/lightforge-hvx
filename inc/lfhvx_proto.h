@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Wire protocol shared by the APPS (arm64) side and the DSP skel.
  * Hand-written replacement for what QAIC would generate from an IDL.

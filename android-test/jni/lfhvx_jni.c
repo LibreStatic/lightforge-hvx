@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * JNI port of apps/lfhvx_bench.c for the installed-app test (untrusted_app).
  * libcdsprpc.so is dlopen'ed; every symbol, struct and constant is declared

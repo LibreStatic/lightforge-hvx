@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: MIT
  * Runs the DSP network source (dsp/lfrife_net.c) on the host with the HVX emulation
  * and compares against the goldens. usage: test_hostemu <rife46_hvx.bin> <golden dir> <pair>... */
 #include <stdio.h>

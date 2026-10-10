@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BSD-3-Clause
+// SPDX-License-Identifier: MIT
 package com.librestatic.lfhvxtest;
 
 import android.app.Activity;

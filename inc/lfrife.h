@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * lfrife: RIFE v4.6 optical-flow network on the Qualcomm Hexagon cDSP (HVX).
  *

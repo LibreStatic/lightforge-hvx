@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  * On-device driver for the RIFE DSP library: probes, accuracy vs golden, timing.
  */
 #define _GNU_SOURCE

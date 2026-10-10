@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: MIT
  * Host/arm64 test + benchmark for the plain-C reference.
  * usage: test_ref <rife46_f32.bin> <golden dir> <pair prefix>... [--max-err px] [--bench N]
  */

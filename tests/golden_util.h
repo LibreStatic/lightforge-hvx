@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: MIT
  * Tiny helpers shared by the host test and the on-device bench: file loading,
  * golden comparison. Header-only, C11. */
 #ifndef LF_GOLDEN_UTIL_H

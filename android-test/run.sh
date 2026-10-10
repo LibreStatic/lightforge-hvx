@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: BSD-3-Clause
+# SPDX-License-Identifier: MIT
 # Install the test APK, launch it in each mode and print the LFHVX log.
 # usage: android-test/run.sh [modes...]   (default: 0)
 set -uo pipefail
-ADB=(adb -s "${ADB_SERIAL:-192.168.0.250:40989}")
+ADB=(adb ${ADB_SERIAL:+-s "$ADB_SERIAL"})
 PKG=com.librestatic.lfhvxtest
 "${ADB[@]}" install -r --no-incremental "$(dirname "$0")/out/lfhvx-test.apk" >/dev/null || exit 1
 for m in "${@:-0}"; do

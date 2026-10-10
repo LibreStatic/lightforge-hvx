@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Minimal FastRPC skel for the Hexagon cDSP, built with upstream clang/lld only.
  * No Hexagon SDK, no QAIC: the marshalling is hand-written against the

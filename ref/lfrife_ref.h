@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Portable plain-C (C11, no dependencies) fp32 implementation of the RIFE v4.6
  * IFNet flow/mask network. Oracle for the HVX kernels and CPU fallback.

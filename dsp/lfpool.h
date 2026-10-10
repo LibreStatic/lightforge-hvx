@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MIT
  *
  * Tiny fork/join pool on QuRT threads for the cDSP. Workers are created per
  * run (qurt_thread_create), each locks one HVX context, and all participants

@@ -23,7 +23,7 @@ all: $(B)/liblfhvx_skel.so $(B)/lfhvx_bench rife
 
 rife: $(B)/liblfrife_skel.so $(B)/lfrife_bench
 
-RIFE_DSP_SRC := dsp/lfrife_skel.c dsp/dsp_common.h dsp/hvx.h inc/lfrife_proto.h inc/lfrife_weights.h
+RIFE_DSP_SRC := dsp/lfrife_skel.c dsp/lfrife_net.c dsp/lfrife_net.h dsp/lfpool.h dsp/dsp_common.h dsp/hvx.h inc/lfrife_proto.h inc/lfrife_weights.h
 
 $(B)/lfrife_skel.o: $(RIFE_DSP_SRC) | $(B)
 	$(HEX_CC) $(HEX_CFLAGS) -O3 -c dsp/lfrife_skel.c -o $@

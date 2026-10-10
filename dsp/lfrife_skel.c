@@ -28,6 +28,8 @@ extern void free(void *) __attribute__((weak));
 extern void *HAP_malloc(size_t) __attribute__((weak));
 extern int posix_memalign(void **, size_t, size_t) __attribute__((weak));
 
+#define LF_UNITY 1
+#include "lfrife_net.c"
 #define DUP(x) Q6_R_combine_RlRl((x), (x))
 static uint8_t g_scratch[16384] __attribute__((aligned(128)));
 static volatile uint32_t g_sink;
@@ -233,6 +235,55 @@ static int probe(const lfrife_probe_args *pa, uint8_t *in, uint32_t inlen, uint8
 }
 
 static int g_open_count;
+static lfnet *g_net;
+static uint8_t *g_blob;
+static uint32_t g_blob_size;
+
+static int do_setup(dsp_remote_arg *pra) {
+    lfrife_setup_args sa;
+    memcpy(&sa, pra[0].buf.pv, sizeof sa);
+    lfrife_setup_res res;
+    memset(&res, 0, sizeof res);
+    uint32_t bsz = pra[1].buf.nLen;
+    if (sa.version != LFRIFE_PROTO_VERSION) { res.rc = -1; goto out; }
+    if (!g_blob || g_blob_size != bsz || (sa.flags & 1)) {
+        if (g_net) { lfnet_destroy(g_net); g_net = 0; }
+        if (g_blob) { free(g_blob); g_blob = 0; }
+        g_blob = (uint8_t *)memalign(128, bsz);
+        if (!g_blob) { res.rc = -3; goto out; }
+        memcpy(g_blob, pra[1].buf.pv, bsz);
+        g_blob_size = bsz;
+    }
+    if (g_net) { lfnet_destroy(g_net); g_net = 0; }
+    g_net = lfnet_create(g_blob, bsz, (int)sa.w, (int)sa.h, (int)sa.nthreads);
+    if (!g_net) { res.rc = -2; goto out; }
+    res.hvx_units = qurt_hvx_get_units ? (uint32_t)qurt_hvx_get_units() : 0;
+    res.scratch_bytes = (uint32_t)lfnet_scratch_bytes(g_net);
+out:
+    memcpy(pra[2].buf.pv, &res, sizeof res);
+    return 0;
+}
+
+static int do_run(dsp_remote_arg *pra) {
+    lfrife_run_args ra;
+    memcpy(&ra, pra[0].buf.pv, sizeof ra);
+    lfrife_run_stats st;
+    memset(&st, 0, sizeof st);
+    int rc = 0;
+    if (!g_net || ra.w != (uint32_t)g_net->W || ra.h != (uint32_t)g_net->H) {
+        st.rc = -2;
+    } else if (qurt_hvx_lock(QURT_HVX_MODE_128B)) {
+        st.rc = -4;
+    } else {
+        float *flow = (float *)pra[3].buf.pv;
+        float *mask = flow + (size_t)4 * ra.w * ra.h;
+        st.rc = lfnet_run(g_net, (const uint8_t *)pra[1].buf.pv, (const uint8_t *)pra[2].buf.pv, (int)ra.stride, ra.t,
+                          flow, mask, (ra.flags & 1) ? &st : 0);
+        qurt_hvx_unlock();
+    }
+    memcpy(pra[4].buf.pv, &st, sizeof st);
+    return rc;
+}
 
 EXPORT int lfrife_skel_handle_invoke(uint64_t h, uint32_t sc, dsp_remote_arg *pra) {
     const uint32_t method = LF_SCALARS_METHOD(sc);
@@ -251,6 +302,12 @@ EXPORT int lfrife_skel_handle_invoke(uint64_t h, uint32_t sc, dsp_remote_arg *pr
         memcpy(&pa, pra[0].buf.pv, sizeof pa);
         return probe(&pa, pra[1].buf.pv, pra[1].buf.nLen, pra[2].buf.pv, pra[2].buf.nLen);
     }
+    case LFRIFE_M_SETUP:
+        if (LF_SCALARS_INBUFS(sc) != 2 || LF_SCALARS_OUTBUFS(sc) != 1) return 0x22;
+        return do_setup(pra);
+    case LFRIFE_M_RUN:
+        if (LF_SCALARS_INBUFS(sc) != 3 || LF_SCALARS_OUTBUFS(sc) != 2) return 0x23;
+        return do_run(pra);
     default:
         return 0x2f;
     }

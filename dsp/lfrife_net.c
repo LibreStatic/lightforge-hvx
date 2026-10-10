@@ -25,10 +25,12 @@ static void *lf_alloc(size_t n) { void *p = aligned_alloc(128, (n + 127) & ~(siz
 static void lf_free(void *p) { free(p); }
 static inline uint64_t lf_now(void) { return 0; }
 #else
+#ifndef LF_UNITY
 extern void *memalign(size_t, size_t);
 extern void free(void *);
 extern void *memset(void *, int, size_t);
 extern void *memcpy(void *, const void *, size_t);
+#endif
 static void *lf_alloc(size_t n) {
     void *p = memalign(128, (n + 127) & ~(size_t)127);
     if (p) memset(p, 0, n);

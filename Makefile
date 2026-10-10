@@ -5,7 +5,7 @@
 
 NDK        ?= $(HOME)/Android/Sdk/ndk/28.2.13676358
 API        ?= 31
-HEX_CPU    ?= hexagonv73
+HEX_CPU    ?= hexagonv81
 HEX_CC     ?= clang
 HEX_LD     ?= ld.lld
 ANDROID_CC ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(API)-clang
@@ -15,11 +15,24 @@ DEVDIR     ?= /data/local/tmp/lightforge-hvx
 
 B := build
 
-HEX_CFLAGS := --target=hexagon -mcpu=$(HEX_CPU) -mhvx -mhvx-length=128b -O2 \
+HEX_CFLAGS := --target=hexagon -mcpu=$(HEX_CPU) -mhvx -mhvx-length=128b -mhvx-ieee-fp -O2 \
               -fPIC -G0 -ffreestanding -fno-builtin -fno-stack-protector -nostdlib \
               -fvisibility=hidden -Wall -Wextra -Wno-unused-parameter
 
-all: $(B)/liblfhvx_skel.so $(B)/lfhvx_bench
+all: $(B)/liblfhvx_skel.so $(B)/lfhvx_bench rife
+
+rife: $(B)/liblfrife_skel.so $(B)/lfrife_bench
+
+RIFE_DSP_SRC := dsp/lfrife_skel.c dsp/dsp_common.h dsp/hvx.h inc/lfrife_proto.h inc/lfrife_weights.h
+
+$(B)/lfrife_skel.o: $(RIFE_DSP_SRC) | $(B)
+	$(HEX_CC) $(HEX_CFLAGS) -O3 -c dsp/lfrife_skel.c -o $@
+
+$(B)/liblfrife_skel.so: $(B)/lfrife_skel.o
+	$(HEX_LD) $(subst liblfhvx_skel.so,liblfrife_skel.so,$(HEX_LDFLAGS)) -o $@ $<
+
+$(B)/lfrife_bench: apps/lfrife_bench.c apps/lfrife.c inc/lfrife.h inc/lfrife_proto.h inc/lfrife_weights.h tests/golden_util.h | $(B)
+	$(ANDROID_CC) -O2 -Wall -Wextra -o $@ apps/lfrife_bench.c apps/lfrife.c -ldl -lm
 
 $(B):
 	mkdir -p $(B)
@@ -67,10 +80,26 @@ push: all
 run: push
 	$(ADB) shell $(DEVDIR)/lfhvx_bench
 
+push-rife: rife
+	$(ADB) shell mkdir -p $(DEVDIR)
+	$(ADB) push $(B)/liblfrife_skel.so $(B)/lfrife_bench $(DEVDIR)/
+	$(ADB) shell chmod 755 $(DEVDIR)/lfrife_bench
+
+push-data: $(B)/weights/rife46_hvx.bin
+	$(ADB) shell mkdir -p $(DEVDIR)/golden
+	$(ADB) push $(B)/weights/rife46_hvx.bin $(B)/weights/rife46_f32.bin $(DEVDIR)/
+	$(ADB) push tests/golden/. $(DEVDIR)/golden/
+
 clean-device:
 	$(ADB) shell rm -rf $(DEVDIR)
 
 clean:
 	rm -rf $(B)
 
-.PHONY: weights test-host all push run clean clean-device
+$(B)/test_hostemu: tests/test_hostemu.c dsp/lfrife_net.c dsp/lfrife_net.h dsp/hvx_emu.h dsp/hvx.h dsp/lfpool.h tests/golden_util.h | $(B)
+	$(HOST_CC) -O2 -std=gnu11 -Wall -DLF_HOST -o $@ tests/test_hostemu.c dsp/lfrife_net.c -lm
+
+test-hostemu: $(B)/test_hostemu $(B)/weights/rife46_hvx.bin
+	$(B)/test_hostemu $(B)/weights/rife46_hvx.bin tests/golden $(GOLDEN_PAIRS)
+
+.PHONY: test-hostemu push-rife push-data rife weights test-host all push run clean clean-device

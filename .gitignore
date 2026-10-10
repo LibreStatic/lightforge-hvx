@@ -1,2 +1,3 @@
 build/
 android-test/out/
+tests/golden/*_dbg/

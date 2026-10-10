@@ -41,7 +41,7 @@ static uint8_t g_lfp_stacks[LFP_MAX][LFP_STACK] __attribute__((aligned(128)));
 static inline void lfp_relax(void) { __asm__ volatile("pause(#1)" ::: "memory"); }
 
 static inline void lfpool_barrier(lfpool *p) {
-    if (p->nt == 1) return;
+    if (p->nt == 1) { p->work_ctr = 0; return; }
     uint32_t gen = __atomic_load_n(&p->bar_gen, __ATOMIC_ACQUIRE);
     if (__atomic_add_fetch(&p->bar_count, 1, __ATOMIC_ACQ_REL) == (uint32_t)p->nt) {
         p->bar_count = 0;

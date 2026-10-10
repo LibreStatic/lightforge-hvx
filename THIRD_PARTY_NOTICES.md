@@ -44,11 +44,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 - [Halide](https://github.com/halide/Halide) (MIT): `src/runtime/qurt_hvx.cpp`, `mini_qurt.h` and
   `mini_qurt_vtcm.h`, for the `qurt_hvx_lock` mode convention, the `qurt_thread_*` prototypes and
-  the VTCM request calls.
+  the VTCM request calls, and the `qurt_hvx_get_units() >> 8` context count.
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT): `ggml/src/ggml-hexagon/htp/main.c`, for
-  the argument lists of the VTCM compute-resource calls.
+  the argument lists of the VTCM compute-resource calls and the `qurt_hvx_get_units() >> 8` use.
 - [tinygrad](https://github.com/tinygrad/tinygrad) (MIT): the DSP build flags and linker-script
-  alignment.
+  alignment, and (`tinygrad/runtime/ops_dsp.py`) the `HAP_power_set` prototype and the field layout
+  of its DCVS v2 request, re-declared in `dsp/lfrife_skel.c`. The voltage-corner values were measured
+  on the device.
 
 ## RIFE
 

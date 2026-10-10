@@ -26,6 +26,42 @@ int main(int argc, char **argv) {
     size_t bsz;
     void *blob = lf_read_file(argv[1], &bsz);
     if (!blob) return 2;
+    if (argc >= 8 && !strcmp(argv[2], "--synth")) { /* test_ref <blob> --synth <w> <h> <dx> <dy> <dsp flow/mask f32 file>: DSP output vs this reference */
+        int sw = atoi(argv[3]), sh = atoi(argv[4]);
+        lfref *sr = lfref_create(blob, bsz, sw, sh);
+        uint8_t *a = malloc((size_t)sw * sh * 4), *b = malloc((size_t)sw * sh * 4);
+        lf_synth_pair(a, b, sw, sh, atoi(argv[5]), atoi(argv[6]));
+        float *rf = malloc(sizeof(float) * 5 * (size_t)sw * sh);
+        lfref_run(sr, a, b, sw * 4, 0.5f, rf, rf + (size_t)4 * sw * sh);
+        size_t dn;
+        float *df = lf_read_file(argv[7], &dn);
+        if (!df || dn != sizeof(float) * 5 * (size_t)sw * sh) { fprintf(stderr, "bad dsp file\n"); return 2; }
+        lf_cmp c = lf_compare(df, rf, df + (size_t)4 * sw * sh, rf + (size_t)4 * sw * sh, sw * sh);
+        double mf = 0;
+        for (int i = 0; i < sw * sh; i++) mf += rf[i];
+        printf("synth %dx%d shift (%s,%s): ref mean flow0 %.2f; DSP vs ref: flow max %.3e mean %.3e frac>0.5px %.4f mask max %.3e mean %.3e\n", sw, sh,
+               argv[5], argv[6], mf / (sw * sh), c.fmax, c.fmean, c.fbad, c.mmax, c.mmean);
+        return 0;
+    }
+    if (argc >= 8 && !strcmp(argv[2], "--shift")) { /* test_ref <blob> --shift <golden dir> <pair> <dx> <dy> <dsp f32 file> */
+        const int sw = 320, sh = 192;
+        lfref *sr = lfref_create(blob, bsz, sw, sh);
+        char pp[512];
+        size_t dn;
+        snprintf(pp, sizeof pp, "%s/%s_img0.rgba", argv[3], argv[4]);
+        uint8_t *a = lf_read_file(pp, &dn), *b = malloc((size_t)sw * sh * 4);
+        lf_shift_rgba(b, a, sw, sh, atoi(argv[5]), atoi(argv[6]));
+        float *rf = malloc(sizeof(float) * 5 * (size_t)sw * sh);
+        lfref_run(sr, a, b, sw * 4, 0.5f, rf, rf + (size_t)4 * sw * sh);
+        float *df = lf_read_file(argv[7], &dn);
+        if (!df || dn != sizeof(float) * 5 * (size_t)sw * sh) { fprintf(stderr, "bad dsp file\n"); return 2; }
+        lf_cmp c = lf_compare(df, rf, df + (size_t)4 * sw * sh, rf + (size_t)4 * sw * sh, sw * sh);
+        double mf = 0;
+        for (int i = 0; i < sw * sh; i++) mf += rf[i];
+        printf("%s shifted (%s,%s): ref mean flow0 %.2f; DSP vs ref: flow max %.3e mean %.3e frac>0.5px %.4f mask max %.3e mean %.3e\n", argv[4], argv[5],
+               argv[6], mf / (sw * sh), c.fmax, c.fmean, c.fbad, c.mmax, c.mmean);
+        return 0;
+    }
     double max_err = 2e-3;
     int bench = 0, w = 320, h = 192;
     const char *pairs[16];

@@ -121,6 +121,38 @@ __attribute__((noinline)) static void k_floor(HVX_Vector *outv, uint32_t iters, 
     outv[0] = a0; outv[1] = a1; outv[2] = a2; outv[3] = a3; outv[4] = a4; outv[5] = a5; outv[6] = a6; outv[7] = a7;
 }
 
+/* K4: int16 x int16 -> int32 pair accumulate (vmpyacc rt form), 8 px */
+__attribute__((noinline)) static void k_i16(const HVX_Vector *wv, const uint16_t *act, uint32_t iters, HVX_Vector *outv) {
+    HVX_VectorPair p0 = Q6_W_vcombine_VV(Q6_V_vzero(), Q6_V_vzero()), p1 = p0, p2 = p0, p3 = p0, p4 = p0, p5 = p0, p6 = p0, p7 = p0;
+    for (uint32_t i = 0; i < iters; i++) {
+        HVX_Vector w = wv[i & 15];
+        const uint16_t *ap = act + (i & 63) * 8;
+        p0 = Q6_Ww_vmpyacc_WwVhRh(p0, w, DUP(ap[0])); p1 = Q6_Ww_vmpyacc_WwVhRh(p1, w, DUP(ap[1]));
+        p2 = Q6_Ww_vmpyacc_WwVhRh(p2, w, DUP(ap[2])); p3 = Q6_Ww_vmpyacc_WwVhRh(p3, w, DUP(ap[3]));
+        p4 = Q6_Ww_vmpyacc_WwVhRh(p4, w, DUP(ap[4])); p5 = Q6_Ww_vmpyacc_WwVhRh(p5, w, DUP(ap[5]));
+        p6 = Q6_Ww_vmpyacc_WwVhRh(p6, w, DUP(ap[6])); p7 = Q6_Ww_vmpyacc_WwVhRh(p7, w, DUP(ap[7]));
+    }
+    outv[0] = Q6_V_lo_W(p0); outv[1] = Q6_V_lo_W(p1); outv[2] = Q6_V_lo_W(p2); outv[3] = Q6_V_lo_W(p3);
+    outv[4] = Q6_V_hi_W(p4); outv[5] = Q6_V_hi_W(p5); outv[6] = Q6_V_hi_W(p6); outv[7] = Q6_V_hi_W(p7);
+    outv[8] = Q6_V_hi_W(p0); outv[9] = Q6_V_hi_W(p1); outv[10] = Q6_V_hi_W(p2); outv[11] = Q6_V_hi_W(p3);
+    outv[12] = Q6_V_lo_W(p4); outv[13] = Q6_V_lo_W(p5); outv[14] = Q6_V_lo_W(p6); outv[15] = Q6_V_lo_W(p7);
+}
+
+/* K5: u8 x s8 -> int32, 4 MACs per word lane (vrmpy rt form), 8 px, one scalar = 4 input channels */
+__attribute__((noinline)) static void k_rmpy(const HVX_Vector *wv, const uint16_t *act, uint32_t iters, HVX_Vector *outv) {
+    HVX_Vector a0 = Q6_V_vzero(), a1 = a0, a2 = a0, a3 = a0, a4 = a0, a5 = a0, a6 = a0, a7 = a0;
+    const uint32_t *au = (const uint32_t *)act;
+    for (uint32_t i = 0; i < iters; i++) {
+        HVX_Vector w = wv[i & 15];
+        const uint32_t *ap = au + (i & 63) * 4;
+        a0 = Q6_Vw_vrmpyacc_VwVubRb(a0, w, ap[0]); a1 = Q6_Vw_vrmpyacc_VwVubRb(a1, w, ap[1]);
+        a2 = Q6_Vw_vrmpyacc_VwVubRb(a2, w, ap[2]); a3 = Q6_Vw_vrmpyacc_VwVubRb(a3, w, ap[3]);
+        a4 = Q6_Vw_vrmpyacc_VwVubRb(a4, w, ap[0] + 1); a5 = Q6_Vw_vrmpyacc_VwVubRb(a5, w, ap[1] + 1);
+        a6 = Q6_Vw_vrmpyacc_VwVubRb(a6, w, ap[2] + 1); a7 = Q6_Vw_vrmpyacc_VwVubRb(a7, w, ap[3] + 1);
+    }
+    outv[0] = a0; outv[1] = a1; outv[2] = a2; outv[3] = a3; outv[4] = a4; outv[5] = a5; outv[6] = a6; outv[7] = a7;
+}
+
 static lfpool g_pool;
 static uint8_t g_mt_scratch[LFP_MAX][16384] __attribute__((aligned(128)));
 static uint32_t g_mt_iters, g_mt_kernel;
@@ -136,6 +168,8 @@ static void mt_fn(lfpool *p, int tid, void *arg) {
     uint64_t c0 = read_pcycle();
     if (g_mt_kernel == 1) k_qf16_rt(wv, act, g_mt_iters, ov);
     else if (g_mt_kernel == 2) k_qf32_w(wv, act, g_mt_iters, ov);
+    else if (g_mt_kernel == 4) k_i16(wv, act, g_mt_iters, ov);
+    else if (g_mt_kernel == 5) k_rmpy(wv, act, g_mt_iters, ov);
     else k_qf16_v(wv, act, g_mt_iters, ov);
     g_mt_pc[tid] = read_pcycle() - c0;
     lfpool_barrier(p);
@@ -218,6 +252,65 @@ static int probe(const lfrife_probe_args *pa, uint8_t *in, uint32_t inlen, uint8
         o[2] = (uint64_t)rc;
         return 0;
     }
+    case 20: { /* semantics of the intrinsics used by the vector stages. in: A sf, B sf, H hf, W3 words, W4 words (5 x 128 B) */
+        if (inlen < 640 || outlen < 40 * 128) return 0x50;
+        HVX_Vector A = *(HVX_UVector *)in, B = *(HVX_UVector *)(in + 128), H = *(HVX_UVector *)(in + 256);
+        HVX_Vector W3 = *(HVX_UVector *)(in + 384), W4 = *(HVX_UVector *)(in + 512);
+        if (qurt_hvx_lock(QURT_HVX_MODE_128B)) return 0x51;
+        HVX_Vector *o = (HVX_Vector *)out;
+        int k = 0;
+        HVX_Vector qa = Q6_Vqf32_vadd_VsfVsf(A, B), qs = Q6_Vqf32_vsub_VsfVsf(A, B), qm = Q6_Vqf32_vmpy_VsfVsf(A, B);
+        o[k++] = Q6_Vsf_equals_Vqf32(qa);
+        o[k++] = Q6_Vsf_equals_Vqf32(qs);
+        o[k++] = Q6_Vsf_equals_Vqf32(qm);
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfRsf(A, 0x40200000u)); /* 2.5 */
+        o[k++] = Q6_Vsf_equals_Vw(W3);
+        o[k++] = Q6_Vw_equals_Vsf(A);
+        o[k++] = Q6_Vsf_vmax_VsfVsf(A, B);
+        o[k++] = Q6_Vsf_vmin_VsfVsf(A, B);
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(qm, qa));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(qa, qs));
+        HVX_VectorPair one = Q6_Wqf32_vmpy_VhfVhf(H, Q6_Vh_vsplat_R(0x3c00));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(one));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(one));
+        o[k++] = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(qm, qa)); /* hi=qm, lo=qa */
+        o[k++] = Q6_Vhf_vcvt_VsfVsf(B, A);
+        HVX_VectorPair cv = Q6_Wsf_vcvt_Vhf(H);
+        o[k++] = Q6_V_lo_W(cv);
+        o[k++] = Q6_V_hi_W(cv);
+        HVX_VectorPair sh = Q6_W_vshuff_VVR(W3, W4, -4);
+        o[k++] = Q6_V_lo_W(sh);
+        o[k++] = Q6_V_hi_W(sh);
+        HVX_VectorPair dl = Q6_W_vdeal_VVR(W3, W4, -4);
+        o[k++] = Q6_V_lo_W(dl);
+        o[k++] = Q6_V_hi_W(dl);
+        o[k++] = Q6_V_valign_VVR(W3, W4, 16);
+        o[k++] = Q6_V_vror_VR(W3, 4);
+        HVX_VectorPred q = Q6_Q_vcmp_gt_VwVw(W3, Q6_V_vsplat_R(10));
+        o[k++] = Q6_V_vmux_QVV(q, W3, W4);
+        HVX_Vector qh = Q6_Vqf16_vmpy_VhfRhf(H, 0x41004100u); /* x8 */
+        HVX_VectorPair w16 = Q6_Wqf32_vmpy_Vqf16Vhf(qh, Q6_Vh_vsplat_R(0x3c00));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(w16));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(w16));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(A, Q6_V_vsplat_R(0x4b000000)));
+        HVX_VectorPair sh2 = Q6_W_vshuff_VVR(W3, W3, -8);
+        o[k++] = Q6_V_lo_W(sh2);
+        o[k++] = Q6_V_hi_W(sh2);
+        HVX_VectorPair sh3 = Q6_W_vshuff_VVR(W3, W4, -2);
+        o[k++] = Q6_V_lo_W(sh3);
+        o[k++] = Q6_V_hi_W(sh3);
+        HVX_VectorPair dl2 = Q6_W_vdeal_VVR(W3, W4, -8);
+        o[k++] = Q6_V_lo_W(dl2);
+        o[k++] = Q6_V_hi_W(dl2);
+        HVX_VectorPair un = Q6_Wuw_vzxt_Vuh(H);
+        o[k++] = Q6_V_lo_W(un);
+        o[k++] = Q6_V_hi_W(un);
+        o[k++] = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_Vqf16Vhf(qh, Q6_Vh_vsplat_R(0x3c00)));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(qm, A));
+        o[k++] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vsf(qm, A));
+        qurt_hvx_unlock();
+        return 0;
+    }
     case 2: { /* which libc symbols does the shell export */
         uint32_t *o = (uint32_t *)out;
         o[0] = malloc != 0; o[1] = memalign != 0; o[2] = calloc != 0; o[3] = free != 0;
@@ -232,6 +325,44 @@ static int probe(const lfrife_probe_args *pa, uint8_t *in, uint32_t inlen, uint8
     default:
         return 0x5f;
     }
+}
+
+/*
+ * DCVS v2 request for HAP_power_set (request type 7). The layout follows the re-declaration in tinygrad's
+ * MIT-licensed tinygrad/runtime/ops_dsp.py (see THIRD_PARTY_NOTICES.md); no SDK header is used.
+ */
+typedef struct {
+    int type;
+    int pad0;
+    _Bool dcvs_enable;
+    char dcvs_option;
+    _Bool set_latency;
+    int latency;
+    _Bool set_dcvs_params;
+    short pad1;
+    char target_corner;
+    char min_corner;
+    char max_corner;
+    int pad2[3];
+} lf_dcvs_v2_req;
+extern int HAP_power_set(void *ctx, void *req) __attribute__((weak));
+static int g_power_ctx; /* its address identifies this client to the power manager */
+static uint32_t g_power_corner;
+
+/* Pins the core and bus clocks at [corner] with DCVS off, or hands them back to DCVS when corner is 0. */
+static int power_vote(uint32_t corner) {
+    if (!HAP_power_set) return -1;
+    lf_dcvs_v2_req q;
+    memset(&q, 0, sizeof q);
+    q.type = 7;
+    q.dcvs_enable = corner == 0;
+    q.set_latency = 1;
+    q.latency = corner ? 100 : 65535; /* us of wake-up latency the client tolerates; large = deep sleep allowed */
+    q.set_dcvs_params = 1;
+    q.target_corner = (char)corner;
+    const int rc = HAP_power_set(&g_power_ctx, &q);
+    if (rc == 0) g_power_corner = corner;
+    return rc;
 }
 
 static int g_open_count;
@@ -255,9 +386,20 @@ static int do_setup(dsp_remote_arg *pra) {
         g_blob_size = bsz;
     }
     if (g_net) { lfnet_destroy(g_net); g_net = 0; }
-    g_net = lfnet_create(g_blob, bsz, (int)sa.w, (int)sa.h, (int)sa.nthreads);
-    if (!g_net) { res.rc = -2; goto out; }
     res.hvx_units = qurt_hvx_get_units ? (uint32_t)qurt_hvx_get_units() : 0;
+    {
+        /* qurt_hvx_get_units() >> 8 = number of 128-byte HVX contexts (0x600 = 6 on the SM8845); lfnet_create then
+         * confirms by really starting that many workers, so a wrong or missing answer cannot hang the barriers */
+        uint32_t nt = sa.nthreads < 1 ? 1 : sa.nthreads > LFP_MAX ? LFP_MAX : sa.nthreads;
+        const uint32_t units = (res.hvx_units >> 8) & 0xff;
+        if (units && nt > units) nt = units;
+        if (qurt_hvx_lock(QURT_HVX_MODE_128B)) { res.rc = -4; goto out; }
+        g_net = lfnet_create(g_blob, bsz, (int)sa.w, (int)sa.h, (int)nt);
+        qurt_hvx_unlock();
+    }
+    if (!g_net) { res.rc = -2; goto out; }
+    res.nthreads = (uint32_t)g_net->nt;
+    res.power_rc = (sa.power || g_power_corner) ? power_vote(sa.power) : 0;
     res.scratch_bytes = (uint32_t)lfnet_scratch_bytes(g_net);
 out:
     memcpy(pra[2].buf.pv, &res, sizeof res);
@@ -279,6 +421,7 @@ static int do_run(dsp_remote_arg *pra) {
         float *mask = flow + (size_t)4 * ra.w * ra.h;
         st.rc = lfnet_run(g_net, (const uint8_t *)pra[1].buf.pv, (const uint8_t *)pra[2].buf.pv, (int)ra.stride, ra.t,
                           flow, mask, (ra.flags & 1) ? &st : 0);
+        st.nthreads = (uint32_t)lfpool_nthreads(&g_net->pool);
         qurt_hvx_unlock();
     }
     memcpy(pra[4].buf.pv, &st, sizeof st);
@@ -295,6 +438,7 @@ EXPORT int lfrife_skel_handle_invoke(uint64_t h, uint32_t sc, dsp_remote_arg *pr
         pra[2].h64 = 0x4c520000u + (uint32_t)g_open_count;
         return 0;
     case LFRIFE_M_CLOSE:
+        if (g_power_corner) power_vote(0);
         return 0;
     case LFRIFE_M_PROBE: {
         if (LF_SCALARS_INBUFS(sc) != 2 || LF_SCALARS_OUTBUFS(sc) != 1) return 0x21;

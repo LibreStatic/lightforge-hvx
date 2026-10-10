@@ -37,7 +37,7 @@ contexts) and VTCM (8 MiB) also work. See "From an installed app" below.
   `HAP_request_VTCM/HAP_release_VTCM`.
 - llama.cpp's MIT `ggml/src/ggml-hexagon/htp/main.c` was read only for the
   argument lists of the `HAP_compute_res_*` VTCM calls and for
-  `qurt_hvx_get_units() >> 8` (the count of 128-byte HVX units). Its SDK
+  `qurt_hvx_get_units() >> 8` (the count of 128-byte HVX units; Halide's `mini_qurt.h` shows the same call; we measured 0x600 = 6 contexts and use it to clamp the lfpool thread count). Its SDK
   headers were not used. The user-PD shell does not export the `HAP_compute_res_*`
   names. It exports a `compute_resource_*` family, which we found by
   probing candidate names as weak imports. The attribute object is passed as

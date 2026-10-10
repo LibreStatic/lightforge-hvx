@@ -98,17 +98,40 @@ static void probe12(lfrife *h) {
 }
 
 static void probe11(lfrife *h) {
-    for (int k = 1; k <= 3; k++)
+    for (int k = 1; k <= 5; k++)
         for (int nt = 1; nt <= 6; nt++) {
             uint64_t o[3];
             uint32_t iters = 100000;
             lfrife_probe(h, 11, (uint32_t)k, iters, (uint32_t)nt, NULL, 0, o, sizeof o);
             lfrife_probe(h, 11, (uint32_t)k, iters, (uint32_t)nt, NULL, 0, o, sizeof o);
-            int macs = k == 2 ? 4 : 8;
+            int macs = k == 2 ? 4 : k == 5 ? 16 : 8;
             printf("kernel %d nt=%d: wall %.3f ms, per-thread %.2f cyc/vmpy, aggregate %.1f MAC/cycle (rc %d)\n", k, nt,
                    o[0] / 19200.0, (double)o[1] / ((double)iters * macs),
-                   64.0 * macs * iters * nt / (o[0] / 19.2 * 1.0) / 1248.0 * 1.0 , (int)o[2]);
+                   (k == 5 ? 128.0 : 64.0) * macs * iters * nt / (o[0] / 19.2 * 1.0) / 1248.0 * 1.0 , (int)o[2]);
         }
+}
+
+static void probe20(lfrife *h) {
+    union { float f[32]; uint32_t u[32]; } A, B;
+    uint16_t H[64];
+    uint32_t W3[32], W4[32];
+    for (int i = 0; i < 32; i++) {
+        A.f[i] = (float)i * 1.37f - 5.3f; B.f[i] = 0.5f * (float)(i % 7 + 1) - 0.25f;
+        W3[i] = (uint32_t)i; W4[i] = 100u + (uint32_t)i;
+    }
+    A.f[3] = 3.0f; A.f[4] = 4.5f; A.f[5] = -2.5f; A.f[6] = 0.0f; A.f[7] = 7.999f;
+    for (int i = 0; i < 64; i++) H[i] = f2h((float)(i + 1));
+    uint8_t in[640], out[40 * 128];
+    memcpy(in, A.f, 128); memcpy(in + 128, B.f, 128); memcpy(in + 256, H, 128); memcpy(in + 384, W3, 128); memcpy(in + 512, W4, 128);
+    memset(out, 0, sizeof out);
+    int rc = lfrife_probe(h, 20, 0, 0, 0, in, sizeof in, out, sizeof out);
+    printf("probe20 rc=%d\n", rc);
+    if (rc) return;
+    for (int k = 0; k < 40; k++) {
+        printf("o%02d:", k);
+        for (int i = 0; i < 32; i++) printf(" %08x", ((uint32_t *)out)[k * 32 + i]);
+        printf("\n");
+    }
 }
 
 static void probe2(lfrife *h, uint32_t sz) {
@@ -125,12 +148,111 @@ static double now_ms(void) {
 }
 static int cmp_d(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 
+static const char *gnames[6] = {"build", "conv0+1", "res", "deconv", "scatter", "upsample"};
+static void print_groups(const double *grp, double den) {
+    printf("per-group mean ms per block (build X / conv0+1 / 8 ResConv / deconv / scatter / upsample ; last block upsample = final output):\n");
+    double tot = 0, scal = 0;
+    for (int b = 0; b < 4; b++) {
+        const double *g = grp + b * 6;
+        printf("  block%d: %.2f %.2f %.2f %.2f %.2f %.2f   [legacy groups: %.2f %.2f %.2f %.2f]\n", b, g[0] / den, g[1] / den,
+               g[2] / den, g[3] / den, g[4] / den, g[5] / den, g[0] / den, g[1] / den, g[2] / den, (g[3] + g[4] + g[5]) / den);
+        for (int k = 0; k < 6; k++) tot += g[k];
+        scal += g[0] + g[4] + g[5];
+    }
+    printf("  sum of groups %.2f ms; build+scatter+upsample (the former scalar stages) %.2f ms\n", tot / den, scal / den);
+    (void)gnames;
+}
+
+/* LFRIFE_CORNER=<n> pins the DSP clocks at DCVS voltage corner n for the session (0 or unset: DCVS decides) */
+static int env_corner(void) {
+    const char *e = getenv("LFRIFE_CORNER");
+    return e ? atoi(e) : 0;
+}
+
+/* time <w> <h> <threads> <iters>: timing only, synthetic textured pair shifted by a few pixels (any size, multiples of 32) */
+static int time_mode(const char *dir, int w, int h, int nthreads, int iters) {
+    char p[512];
+    snprintf(p, sizeof p, "%s/rife46_hvx.bin", dir);
+    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = nthreads, .qos = -1, .power_corner = env_corner()};
+    lfrife *r = NULL;
+    int rc = lfrife_open(&cfg, &r);
+    printf("open+setup %dx%d: %d (%s) raw 0x%x; threads %d\n", w, h, rc, lfrife_strerror(rc), r ? lfrife_last_rc(r) : 0, r ? lfrife_threads(r) : 0);
+    if (rc) return 1;
+    lfrife_set_profiling(r, 1);
+    uint8_t *i0 = malloc((size_t)w * h * 4), *i1 = malloc((size_t)w * h * 4);
+    lf_synth_pair(i0, i1, w, h, 6, 3);
+    float *flow = malloc(sizeof(float) * 5 * w * h), *mask = flow + (size_t)4 * w * h;
+    double *dsp = malloc(sizeof(double) * (size_t)iters), grp[24] = {0};
+    for (int i = 0; i < iters; i++) {
+        rc = lfrife_flow(r, i0, i1, w * 4, w, h, 0.5f, flow, mask);
+        if (rc) { printf("lfrife_flow failed: %d raw 0x%x\n", rc, lfrife_last_rc(r)); return 1; }
+        lfrife_stats st;
+        lfrife_get_stats(r, &st);
+        dsp[i] = st.total_ms;
+        if (i > 0) for (int g = 0; g < 24; g++) grp[g] += st.group_ms[g];
+        if (i == iters - 1) printf("threads used %d, clock %.0f MHz, corner %d vote rc %d\n", st.nthreads, st.dsp_mhz, env_corner(), st.power_rc);
+    }
+    double sf = 0, sm = 0;
+    for (int i = 0; i < w * h; i++) { sf += flow[i]; sm += mask[i]; }
+    printf("mean flow0 %.3f (expect ~ -3..-6 if the shift is found), mean mask %.3f, checksum finite %d\n", sf / (w * h), sm / (w * h), sf == sf && sm == sm);
+    qsort(dsp, (size_t)iters, sizeof(double), cmp_d);
+    printf("dsp p50 %.1f p90 %.1f min %.1f ms (%d iters)\n", dsp[iters / 2], dsp[(iters * 9) / 10], dsp[0], iters);
+    if (iters > 1) print_groups(grp, iters - 1);
+    lfrife_close(r);
+    return 0;
+}
+
+/* synth <w> <h> <dx> <dy> <out>: run one synthetic pair (img1 = img0 moved by dx,dy) and dump flow (4 planes) + mask as f32 */
+static int synth_mode(const char *dir, int w, int h, int dx, int dy, const char *outp) {
+    char p[512];
+    snprintf(p, sizeof p, "%s/rife46_hvx.bin", dir);
+    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = 6, .qos = -1, .power_corner = env_corner()};
+    lfrife *r = NULL;
+    int rc = lfrife_open(&cfg, &r);
+    if (rc) { printf("open failed %d\n", rc); return 1; }
+    uint8_t *i0 = malloc((size_t)w * h * 4), *i1 = malloc((size_t)w * h * 4);
+    lf_synth_pair(i0, i1, w, h, dx, dy);
+    float *flow = malloc(sizeof(float) * 5 * w * h), *mask = flow + (size_t)4 * w * h;
+    rc = lfrife_flow(r, i0, i1, w * 4, w, h, 0.5f, flow, mask);
+    if (rc) { printf("lfrife_flow failed: %d raw 0x%x\n", rc, lfrife_last_rc(r)); return 1; }
+    FILE *f = fopen(outp, "wb");
+    fwrite(flow, 4, (size_t)5 * w * h, f);
+    fclose(f);
+    printf("wrote %s\n", outp);
+    lfrife_close(r);
+    return 0;
+}
+
+/* shift <pair> <dx> <dy> <out>: golden img0 and the same image moved by (dx,dy): large-motion check against the host reference */
+static int shift_mode(const char *dir, const char *pair, int dx, int dy, const char *outp) {
+    char p[512];
+    snprintf(p, sizeof p, "%s/rife46_hvx.bin", dir);
+    const int w = 320, h = 192;
+    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = 6, .qos = -1, .power_corner = env_corner()};
+    lfrife *r = NULL;
+    int rc = lfrife_open(&cfg, &r);
+    if (rc) { printf("open failed %d\n", rc); return 1; }
+    size_t n;
+    snprintf(p, sizeof p, "%s/golden/%s_img0.rgba", dir, pair);
+    uint8_t *i0 = lf_read_file(p, &n), *i1 = malloc((size_t)w * h * 4);
+    if (!i0) return 1;
+    lf_shift_rgba(i1, i0, w, h, dx, dy);
+    float *flow = malloc(sizeof(float) * 5 * w * h), *mask = flow + (size_t)4 * w * h;
+    rc = lfrife_flow(r, i0, i1, w * 4, w, h, 0.5f, flow, mask);
+    if (rc) { printf("lfrife_flow failed: %d raw 0x%x\n", rc, lfrife_last_rc(r)); return 1; }
+    FILE *f = fopen(outp, "wb");
+    fwrite(flow, 4, (size_t)5 * w * h, f);
+    fclose(f);
+    lfrife_close(r);
+    return 0;
+}
+
 /* run <threads> <iters> <pair>... : accuracy vs golden + cold/warm timing + per-group breakdown */
 static int run_mode(const char *dir, int nthreads, int iters, int npairs, char **pairs) {
     const int w = 320, h = 192;
     char p[512];
     snprintf(p, sizeof p, "%s/rife46_hvx.bin", dir);
-    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = nthreads, .qos = -1};
+    lfrife_config cfg = {.skel_dir = dir, .weights_path = p, .width = w, .height = h, .nthreads = nthreads, .qos = -1, .power_corner = env_corner()};
     lfrife *r = NULL;
     double t0 = now_ms();
     int rc = lfrife_open(&cfg, &r);
@@ -139,7 +261,7 @@ static int run_mode(const char *dir, int nthreads, int iters, int npairs, char *
     lfrife_set_profiling(r, 1);
     float *flow = malloc(sizeof(float) * 4 * w * h), *mask = malloc(sizeof(float) * w * h);
     double *ts = malloc(sizeof(double) * (size_t)iters), *dsp = malloc(sizeof(double) * (size_t)iters);
-    double grp[16] = {0};
+    double grp[24] = {0};
     for (int k = 0; k < npairs; k++) {
         char q[512];
         size_t n;
@@ -161,7 +283,7 @@ static int run_mode(const char *dir, int nthreads, int iters, int npairs, char *
             lfrife_stats st;
             lfrife_get_stats(r, &st);
             dsp[i] = st.total_ms;
-            if (i > 0) for (int g = 0; g < 16; g++) grp[g] += st.group_ms[g];
+            if (i > 0) for (int g = 0; g < 24; g++) grp[g] += st.group_ms[g];
             if (rc) { printf("lfrife_flow failed: %d (%s) raw 0x%x\n", rc, lfrife_strerror(rc), lfrife_last_rc(r)); return 1; }
         }
         lf_cmp c = lf_compare(flow, gf, mask, gm, w * h);
@@ -174,13 +296,7 @@ static int run_mode(const char *dir, int nthreads, int iters, int npairs, char *
                ts[iters / 2], ts[(iters * 9) / 10], dsp[iters / 2], dsp[(iters * 9) / 10], iters, nthreads);
         free(i0); free(i1); free(gf); free(gm);
     }
-    if (iters > 1) {
-        double den = (double)(iters - 1) * npairs;
-        printf("per-group mean ms (build X / conv0+1 / res / deconv+up) per block:\n");
-        for (int b = 0; b < 4; b++)
-            printf("  block%d: %.2f %.2f %.2f %.2f\n", b, grp[b * 4] / den, grp[b * 4 + 1] / den, grp[b * 4 + 2] / den,
-                   grp[b * 4 + 3] / den);
-    }
+    if (iters > 1) print_groups(grp, (double)(iters - 1) * npairs);
     lfrife_close(r);
     return 0;
 }
@@ -188,9 +304,15 @@ static int run_mode(const char *dir, int nthreads, int iters, int npairs, char *
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "run") && argc > 4)
         return run_mode("/data/local/tmp/lightforge-hvx", atoi(argv[2]), atoi(argv[3]), argc - 4, argv + 4);
+    if (argc > 5 && !strcmp(argv[1], "time"))
+        return time_mode("/data/local/tmp/lightforge-hvx", atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+    if (argc > 6 && !strcmp(argv[1], "synth"))
+        return synth_mode("/data/local/tmp/lightforge-hvx", atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), argv[6]);
+    if (argc > 5 && !strcmp(argv[1], "shift"))
+        return shift_mode("/data/local/tmp/lightforge-hvx", argv[2], atoi(argv[3]), atoi(argv[4]), argv[5]);
     const char *dir = "/data/local/tmp/lightforge-hvx";
     const char *cmd = argc > 1 ? argv[1] : "probe";
-    lfrife_config cfg = {.skel_dir = dir, .qos = -1};
+    lfrife_config cfg = {.skel_dir = dir, .qos = -1, .power_corner = env_corner()};
     lfrife *h = NULL;
     int rc = lfrife_open(&cfg, &h);
     printf("lfrife_open: %d (%s) raw 0x%x\n", rc, lfrife_strerror(rc), h ? lfrife_last_rc(h) : 0);
@@ -200,6 +322,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "probe10")) probe10(h);
     else if (!strcmp(cmd, "probe12")) probe12(h);
     else if (!strcmp(cmd, "probe11")) probe11(h);
+    else if (!strcmp(cmd, "probe20")) probe20(h);
     else if (!strcmp(cmd, "probe2")) probe2(h, argc > 2 ? (uint32_t)atoi(argv[2]) : 0);
     lfrife_close(h);
     return 0;

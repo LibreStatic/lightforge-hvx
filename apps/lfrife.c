@@ -222,7 +222,8 @@ int lfrife_open(const lfrife_config *cfg, lfrife **out) {
                                 .w = (uint32_t)cfg->width,
                                 .h = (uint32_t)cfg->height,
                                 .flags = 1,
-                                .nthreads = (uint32_t)(cfg->nthreads > 0 ? cfg->nthreads : 4)};
+                                .nthreads = (uint32_t)(cfg->nthreads > 0 ? cfg->nthreads : 4),
+                                .power = (uint32_t)(cfg->power_corner > 0 ? cfg->power_corner : 0)};
         lfrife_setup_res res;
         memset(&res, 0, sizeof res);
         remote_arg pra[3];
@@ -240,7 +241,8 @@ int lfrife_open(const lfrife_config *cfg, lfrife **out) {
         }
         r->w = cfg->width;
         r->h_px = cfg->height;
-        r->nthreads = (int)sa.nthreads;
+        r->nthreads = res.nthreads ? (int)res.nthreads : (int)sa.nthreads;
+        r->stats.power_rc = res.power_rc;
         r->in_bytes = (size_t)r->w * r->h_px * 4;
         r->out_bytes = (size_t)r->w * r->h_px * 5 * sizeof(float);
         r->in0 = buf_alloc(r, r->in_bytes);
@@ -287,9 +289,12 @@ int lfrife_flow(lfrife *r, const uint8_t *rgba0, const uint8_t *rgba1, int strid
     memcpy(out_mask, (float *)r->outb + (size_t)4 * width * height, sizeof(float) * width * height);
     r->stats.total_ms = (double)r->rs->total_ticks / 19200.0;
     r->stats.nthreads = (int)r->rs->nthreads;
-    for (int i = 0; i < 16; i++) r->stats.group_ms[i] = (double)r->rs->group_ticks[i] / 19200.0;
+    r->stats.dsp_mhz = r->rs->total_ticks ? (double)r->rs->pcycles * 19.2 / (double)r->rs->total_ticks : 0.0;
+    for (int i = 0; i < LFRIFE_NGROUPS; i++) r->stats.group_ms[i] = (double)r->rs->group_ticks[i] / 19200.0;
     return LFRIFE_OK;
 }
+
+int lfrife_threads(const lfrife *r) { return r ? r->nthreads : 0; }
 
 int lfrife_get_stats(const lfrife *r, lfrife_stats *st) {
     *st = r->stats;

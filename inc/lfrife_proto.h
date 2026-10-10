@@ -13,7 +13,7 @@
 
 #define LFRIFE_SKEL_NAME "liblfrife_skel.so"
 #define LFRIFE_SKEL_SYMBOL "lfrife_skel_handle_invoke"
-#define LFRIFE_PROTO_VERSION 1
+#define LFRIFE_PROTO_VERSION 2
 
 enum lfrife_method {
     LFRIFE_M_OPEN = 0,
@@ -44,7 +44,8 @@ typedef struct {
     uint32_t w, h;
     uint32_t flags;
     uint32_t nthreads;
-    uint32_t pad[3];
+    uint32_t power; /* 0: leave the clock to DCVS; otherwise a DCVS voltage corner to pin while the session lives */
+    uint32_t pad[2];
 } lfrife_setup_args;
 
 typedef struct {
@@ -52,7 +53,9 @@ typedef struct {
     uint32_t hvx_units;
     uint32_t vtcm_size;
     uint32_t scratch_bytes;
-    uint32_t pad[4];
+    uint32_t nthreads; /* threads the DSP will really use: min(requested, LFP_MAX, HVX contexts, contexts that locked) */
+    int32_t power_rc;  /* HAP_power_set result for the requested corner; -1 when the symbol is missing */
+    uint32_t pad[2];
 } lfrife_setup_res;
 
 typedef struct {
@@ -63,13 +66,14 @@ typedef struct {
     uint32_t pad[3];
 } lfrife_run_args;
 
-#define LFRIFE_NGROUPS 16
+#define LFRIFE_NGROUPS 24
 typedef struct {
     int32_t rc;
     uint32_t nthreads;
     uint64_t total_ticks;               /* UTIMER (19.2 MHz) over the whole run */
     uint64_t group_ticks[LFRIFE_NGROUPS]; /* per stage group, UTIMER ticks (see lfrife_group_names) */
-    uint64_t pad[4];
+    uint64_t pcycles;                   /* processor cycles over the same span: clock = pcycles / total_ticks * 19.2 MHz */
+    uint64_t pad[3];
 } lfrife_run_stats;
 
 #endif

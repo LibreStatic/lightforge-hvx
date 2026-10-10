@@ -17,7 +17,7 @@ B := build
 
 HEX_CFLAGS := --target=hexagon -mcpu=$(HEX_CPU) -mhvx -mhvx-length=128b -mhvx-ieee-fp -O2 \
               -fPIC -G0 -ffreestanding -fno-builtin -fno-stack-protector -nostdlib \
-              -fvisibility=hidden -Wall -Wextra -Wno-unused-parameter
+              -fvisibility=hidden -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter
 
 all: $(B)/liblfhvx_skel.so $(B)/lfhvx_bench rife
 
@@ -97,7 +97,7 @@ clean:
 	rm -rf $(B)
 
 $(B)/test_hostemu: tests/test_hostemu.c dsp/lfrife_net.c dsp/lfrife_net.h dsp/hvx_emu.h dsp/hvx.h dsp/lfpool.h tests/golden_util.h | $(B)
-	$(HOST_CC) -O2 -std=gnu11 -Wall -DLF_HOST -o $@ tests/test_hostemu.c dsp/lfrife_net.c -lm
+	$(HOST_CC) -O2 -std=gnu11 -fno-strict-aliasing -Wall -DLF_HOST -o $@ tests/test_hostemu.c dsp/lfrife_net.c -lm
 
 test-hostemu: $(B)/test_hostemu $(B)/weights/rife46_hvx.bin
 	$(B)/test_hostemu $(B)/weights/rife46_hvx.bin tests/golden $(GOLDEN_PAIRS)

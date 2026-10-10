@@ -49,13 +49,17 @@ typedef struct {
     int nthreads;
     /* remote_rpc_latency_flags-style hint: -1 default, 0 off, 1 PM QoS, 3 poll. */
     int qos;
+    /* DCVS voltage corner to pin while the session is open (0 = let DCVS decide). See docs/rife.md. */
+    int power_corner;
 } lfrife_config;
 
 typedef struct {
     double total_ms;     /* DSP-side time of the last lfrife_flow call (UTIMER) */
     double call_ms;      /* wall time of the whole RPC incl. marshalling */
-    double group_ms[16]; /* per stage group, DSP-side (valid when profiling is on) */
-    int nthreads;
+    double group_ms[24]; /* per stage group, DSP-side (valid when profiling is on) */
+    int nthreads;        /* threads that took part in the last call */
+    double dsp_mhz;      /* average DSP core clock during the last call */
+    int power_rc;        /* HAP_power_set result of the corner vote at open (0 ok, -1 unavailable) */
 } lfrife_stats;
 
 /* Open the DSP session, load the skel and the weights. Returns LFRIFE_OK or a negative LFRIFE_ERR_*. */
@@ -70,6 +74,8 @@ LFRIFE_API int lfrife_open(const lfrife_config *cfg, lfrife **out);
 LFRIFE_API int lfrife_flow(lfrife *h, const uint8_t *rgba0, const uint8_t *rgba1, int stride_bytes, int width,
                            int height, float t, float *out_flow, float *out_mask);
 
+/* Threads the DSP uses (clamped at open to the HVX contexts it really has); 0 before a network is set up. */
+LFRIFE_API int lfrife_threads(const lfrife *h);
 LFRIFE_API int lfrife_get_stats(const lfrife *h, lfrife_stats *st);
 LFRIFE_API void lfrife_set_profiling(lfrife *h, int enable);
 LFRIFE_API void lfrife_close(lfrife *h);

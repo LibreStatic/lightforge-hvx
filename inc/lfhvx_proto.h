@@ -50,6 +50,15 @@ enum lfhvx_method {
     LFHVX_M_MAC_HVX = 5,
     /* info: out[0] = lfhvx_info */
     LFHVX_M_INFO = 6,
+    /*
+     * Multithreaded int16 MAC: same buffers as LFHVX_M_MAC_HVX, args.flags =
+     * number of qurt threads (1..4). Each thread takes a contiguous chunk,
+     * locks its own HVX context and the checksums are summed.
+     * result.hvx_mode reports qurt_hvx_get_units() (0 if unavailable).
+     */
+    LFHVX_M_MAC_MT = 7,
+    /* VTCM probe: out[0] = lfhvx_vtcm_info */
+    LFHVX_M_VTCM = 8,
 };
 
 typedef struct {
@@ -75,5 +84,26 @@ typedef struct {
     uint32_t hvx_mode_locked;
     uint32_t skel_version;
 } lfhvx_info;
+
+typedef struct {
+    int32_t has_attr_init;    /* HAP_compute_res_attr_init resolved */
+    int32_t has_acquire;      /* HAP_compute_res_acquire resolved */
+    int32_t has_request_vtcm; /* HAP_request_VTCM resolved */
+    int32_t has_hvx_units;    /* qurt_hvx_get_units resolved */
+    int32_t hvx_units;        /* qurt_hvx_get_units() raw value */
+    int32_t attr_init_rc;
+    int32_t set_vtcm_rc;
+    uint32_t ctx_id;          /* HAP_compute_res_acquire() context, 0 = failed */
+    uint32_t vtcm_ptr;        /* VTCM address from the compute resource manager */
+    uint32_t vtcm_size;
+    int32_t vtcm_rw_ok;       /* write/read-back pattern check */
+    int32_t release_rc;
+    uint32_t req_size;        /* HAP_request_VTCM size tried */
+    uint32_t req_ptr;         /* HAP_request_VTCM result (0 = failed) */
+    uint32_t bench_bytes;     /* bytes processed in each mini bench */
+    uint32_t pad;
+    uint64_t vtcm_pcycles;    /* u8 sat-add, src/dst in VTCM */
+    uint64_t ddr_pcycles;     /* same kernel, same size, DDR-backed heap-less buffers */
+} lfhvx_vtcm_info;
 
 #endif
